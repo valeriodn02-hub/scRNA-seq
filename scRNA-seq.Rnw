@@ -27,28 +27,29 @@ DimPlot(object = seu_obj, reduction = 'umap.harmony', group.by = "Cell_Type", la
 
 
 #########################################################################
-#GENERAZIONE SEU PROVA
+#GENERAZIONE SEU RAW
 #########################################################################
 
 set.seed(42)
 
-seu_cellule <- sample(colnames(seu_obj), size = 20000)
+matrice_completa <- LayerData(seu_obj, assay = "RNA", layer = "counts")
 
-raw_counts_subset <- LayerData(seu_obj, assay = "RNA", layer = "counts")[ , seu_cellule]
+metadata_completi <- seu_obj@meta.data
 
-# Estraiamo i metadati
-metadata_subset <- seu_obj@meta.data[seu_cellule, ]
+# Creiamo il nuovo oggetto "Vergine" pronto per il tuo QC
+seu_qc_ready <- CreateSeuratObject(counts = matrice_completa, 
+                                   meta.data = metadata_completi, 
+                                   project = "QC_Completo")
 
-seu_pratica<- CreateSeuratObject(counts = raw_counts_subset, 
-                                 meta.data = metadata_subset, 
-                                 project = "Mio Test Gastrico")
-# Puliamo la RAM
-rm(raw_counts_subset, metadata_subset)
+#Operazione di pulizia vitale per non far esplodere il PC!
+# Rimuoviamo le variabili temporanee e diciamo a R di liberare la memoria
+rm(matrice_completa, metadata_completi)
 gc()
 
-seu_pratica
+# Controlliamo il risultato
+seu_qc_ready
 #An object of class Seurat 
-#39058 features across 20000 samples within 1 assay 
+#39058 features across 574532 samples within 1 assay 
 #Active assay: RNA (39058 features, 0 variable features)
 #1 layer present: counts
 @
@@ -58,48 +59,45 @@ library(tidyverse)
 library(pheatmap)
 library(patchwork)
 
-<<QC_full>>=
-library(tidyverse)
-library(pheatmap)
-library(patchwork)
+seu_obj1<- seu_qc_ready
 
-seu_obj@assays$RNA$counts[1:2, 1:2]
+seu_obj1@assays$RNA$counts[1:2, 1:2]
 
 # Calcolo percentuale mitocondriale
-seu_obj$percent.mt <- PercentageFeatureSet(object = seu_obj, pattern = '^MT-')
+seu_obj1$percent.mt <- PercentageFeatureSet(object = seu_obj, pattern = '^MT-')
 
 #Decido che soglia usare
-VlnPlot(object = seu_obj, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size = 0)
-FeatureScatter(seu_obj, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+VlnPlot(object = seu_obj1, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size = 0)
+FeatureScatter(seu_obj1, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
 
 # Prendo i nomi dei geni mitocondriali (validi per tutto l'oggetto)
-mt_genes <- grep('^MT-', rownames(seu_obj), value = TRUE)
+mt_genes <- grep('^MT-', rownames(seu_obj1), value = TRUE)
 mt_genes
 
 # Sottoinsieme di sole cellule GSE225275
-cells_225275 <- WhichCells(seu_obj, expression = Dataset == "GSE225275")
+cells_225275 <- WhichCells(seu_obj1, expression = Dataset == "GSE225275")
 
 # Guardo se i conteggi grezzi su quei geni sono tutti zero SOLO per queste cellule
-counts_225275 <- GetAssayData(seu_obj, layer = "counts")[mt_genes, cells_225275]
+counts_225275 <- GetAssayData(seu_obj1, layer = "counts")[mt_genes, cells_225275]
 summary(rowSums(counts_225275))
 range(counts_225275)
 
 # Confronto con un dataset che ha percent.mt normale, es. GSE134520
-cells_134520 <- WhichCells(seu_obj, expression = Dataset == "GSE134520")
-counts_134520 <- GetAssayData(seu_obj, layer = "counts")[mt_genes, cells_134520]
+cells_134520 <- WhichCells(seu_obj1, expression = Dataset == "GSE134520")
+counts_134520 <- GetAssayData(seu_obj1, layer = "counts")[mt_genes, cells_134520]
 summary(rowSums(counts_134520))
 range(counts_134520)
 
 # Elimino il dataset GSE225275 perché ha troppi pochi geni mitocondriali (<55)
-seu_obj1 <- subset(seu_obj, subset = Dataset != 'GSE225275')
+seu_obj2 <- subset(seu_obj1, subset = Dataset != 'GSE225275')
 table(seu_obj1$Dataset)
 
 # Creo violin plot per capire che soglia decidere per le features
-VlnPlot(seu_obj1, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size = 0)
-FeatureScatter(seu_obj1, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+VlnPlot(seu_obj2, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size = 0)
+FeatureScatter(seu_obj2, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
 
 # Applico i filtri definiti
-seu_pulito_full <- subset(seu_obj1, 
+seu_pulito_full <- subset(seu_obj2, 
                           subset = nFeature_RNA > 500 & 
                                    nFeature_RNA < 3500 &
                                    percent.mt < 15)
