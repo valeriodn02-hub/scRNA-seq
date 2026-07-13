@@ -13,7 +13,7 @@ gc()
 
 library(Seurat)
 
-percorso_file <- "C:/Users/User/OneDrive/Desktop/scRNA-seq/Gastric_integrated_data.rds"
+percorso_file <- "C:/Users/User/OneDrive/Desktop/Progetto scRNA-seq/Gastric_integrated_data.rds"
 
 # Carica il file
 seu_obj <- readRDS(percorso_file)
@@ -58,24 +58,61 @@ library(tidyverse)
 library(pheatmap)
 library(patchwork)
 
-seu_pratica@assays$RNA$counts[1:2, 1:2]
+<<QC_full>>=
+library(tidyverse)
+library(pheatmap)
+library(patchwork)
 
-#Calcolo percentuale mitocondriale
-seu_pratica$percent.mt <-PercentageFeatureSet(object = seu_pratica, pattern = '^MT-')
+seu_obj@assays$RNA$counts[1:2, 1:2]
 
-VlnPlot(object = seu_pratica, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+# Calcolo percentuale mitocondriale
+seu_obj$percent.mt <- PercentageFeatureSet(object = seu_obj, pattern = '^MT-')
 
-# Applichiamo i filtri definiti
-seu_pulito <- subset(seu_pratica, 
-                     subset = nFeature_RNA > 500 & 
-                              percent.mt < 10)
+#Decido che soglia usare
+VlnPlot(object = seu_obj, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size = 0)
+FeatureScatter(seu_obj, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
 
-# Verifichiamo quante cellule sono rimaste
-cat("Cellule dopo il filtro:", ncol(seu_pulito), "\n")
-#Cellule dopo il filtro: 13755
+# Prendo i nomi dei geni mitocondriali (validi per tutto l'oggetto)
+mt_genes <- grep('^MT-', rownames(seu_obj), value = TRUE)
+mt_genes
 
-# Re-ispezioniamo i violini dopo la pulizia
-VlnPlot(seu_pulito, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+# Sottoinsieme di sole cellule GSE225275
+cells_225275 <- WhichCells(seu_obj, expression = Dataset == "GSE225275")
+
+# Guardo se i conteggi grezzi su quei geni sono tutti zero SOLO per queste cellule
+counts_225275 <- GetAssayData(seu_obj, layer = "counts")[mt_genes, cells_225275]
+summary(rowSums(counts_225275))
+range(counts_225275)
+
+# Confronto con un dataset che ha percent.mt normale, es. GSE134520
+cells_134520 <- WhichCells(seu_obj, expression = Dataset == "GSE134520")
+counts_134520 <- GetAssayData(seu_obj, layer = "counts")[mt_genes, cells_134520]
+summary(rowSums(counts_134520))
+range(counts_134520)
+
+# Elimino il dataset GSE225275 perché ha troppi pochi geni mitocondriali (<55)
+seu_obj1 <- subset(seu_obj, subset = Dataset != 'GSE225275')
+table(seu_obj1$Dataset)
+
+# Creo violin plot per capire che soglia decidere per le features
+VlnPlot(seu_obj1, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size = 0)
+FeatureScatter(seu_obj1, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+
+# Applico i filtri definiti
+seu_pulito_full <- subset(seu_obj1, 
+                          subset = nFeature_RNA > 500 & 
+                                   nFeature_RNA < 3500 &
+                                   percent.mt < 15)
+
+# Verifico quante cellule sono rimaste
+cat("Cellule dopo il filtro:", ncol(seu_pulito_full), "\n")
+cat("Percentuale mantenuta:", round(100 * ncol(seu_pulito_full) / ncol(seu_obj), 2), "%\n")
+
+# Re-ispeziono i violini dopo la pulizia
+VlnPlot(seu_pulito, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size = 0)
+
+# IL COMANDO MAGICO PER SALVARE:
+ggsave("grafici/umap_cellule.png", plot = mio_plot, width = 8, height = 6, dpi = 300)
 @
 
 
