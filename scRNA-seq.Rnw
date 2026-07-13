@@ -1,0 +1,82 @@
+\documentclass{article}
+
+\begin{document}
+\SweaveOpts{concordance=TRUE}
+
+<<load data>>=
+
+install.packages("Seurat")
+
+# Pulisci la memoria da eventuali rimasugli
+rm(list = ls())
+gc() 
+
+library(Seurat)
+
+percorso_file <- "C:/Users/User/OneDrive/Desktop/scRNA-seq/Gastric_integrated_data.rds"
+
+# Carica il file
+seu_obj <- readRDS(percorso_file)
+print("Caricamento completato!")
+
+seu_obj
+
+str(seu_obj)
+
+DimPlot(object = seu_obj, reduction = 'umap.harmony', group.by = "Cell_Type", label = T)
+
+
+#########################################################################
+#GENERAZIONE SEU PROVA
+#########################################################################
+
+set.seed(42)
+
+seu_cellule <- sample(colnames(seu_obj), size = 20000)
+
+raw_counts_subset <- LayerData(seu_obj, assay = "RNA", layer = "counts")[ , seu_cellule]
+
+# Estraiamo i metadati
+metadata_subset <- seu_obj@meta.data[seu_cellule, ]
+
+seu_pratica<- CreateSeuratObject(counts = raw_counts_subset, 
+                                 meta.data = metadata_subset, 
+                                 project = "Mio Test Gastrico")
+# Puliamo la RAM
+rm(raw_counts_subset, metadata_subset)
+gc()
+
+seu_pratica
+#An object of class Seurat 
+#39058 features across 20000 samples within 1 assay 
+#Active assay: RNA (39058 features, 0 variable features)
+#1 layer present: counts
+@
+
+<<QC>>=
+library(tidyverse)
+library(pheatmap)
+library(patchwork)
+
+seu_pratica@assays$RNA$counts[1:2, 1:2]
+
+#Calcolo percentuale mitocondriale
+seu_pratica$percent.mt <-PercentageFeatureSet(object = seu_pratica, pattern = '^MT-')
+
+VlnPlot(object = seu_pratica, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+
+# Applichiamo i filtri definiti
+seu_pulito <- subset(seu_pratica, 
+                     subset = nFeature_RNA > 500 & 
+                              percent.mt < 10)
+
+# Verifichiamo quante cellule sono rimaste
+cat("Cellule dopo il filtro:", ncol(seu_pulito), "\n")
+#Cellule dopo il filtro: 13755
+
+# Re-ispezioniamo i violini dopo la pulizia
+VlnPlot(seu_pulito, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+@
+
+
+\end{document}
