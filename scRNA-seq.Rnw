@@ -13,7 +13,9 @@ gc()
 
 library(Seurat)
 
-percorso_file <- "C:/Users/User/OneDrive/Desktop/Progetto scRNA-seq/Gastric_integrated_data.rds"
+
+# percorso_file <- "C:/Users/User/OneDrive/Desktop/Progetto scRNA-seq/Gastric_integrated_data.rds"
+percorso_file <- "~/Desktop/Progetto scRNA-seq/Gastric_integrated_data.rds"
 
 # Carica il file
 seu_obj <- readRDS(percorso_file)
@@ -32,26 +34,44 @@ DimPlot(object = seu_obj, reduction = 'umap.harmony', group.by = "Cell_Type", la
 
 set.seed(42)
 
-matrice_completa <- LayerData(seu_obj, assay = "RNA", layer = "counts")
 
-metadata_completi <- seu_obj@meta.data
+# 2. Usiamo DietSeurat per mantenere SOLO l'assay RNA e i raw counts
+# Mettiamo scale.data = FALSE, dimreducs = NULL, e graphs = NULL
+# Questo butterà via UMAP, PCA, normalizzazioni e tutto il resto, 
+# lasciando un oggetto pulito senza causare picchi di RAM
+seu_qc_ready <- DietSeurat(seu_obj, 
+                           assays = "RNA", 
+                           counts = TRUE,      # Teniamo i raw counts
+                           data = FALSE,       # Buttiamo i dati normalizzati
+                           scale.data = FALSE, # Buttiamo i dati scalati
+                           dimreducs = NULL,   # Buttiamo PCA, UMAP, ecc.
+                           graphs = NULL)      # Buttiamo i grafi di clustering
 
-# Creiamo il nuovo oggetto "Vergine" pronto per il tuo QC
-seu_qc_ready <- CreateSeuratObject(counts = matrice_completa, 
-                                   meta.data = metadata_completi, 
-                                   project = "QC_Completo")
-
-#Operazione di pulizia vitale per non far esplodere il PC!
-# Rimuoviamo le variabili temporanee e diciamo a R di liberare la memoria
-rm(matrice_completa, metadata_completi)
-gc()
-
-# Controlliamo il risultato
+# Controllo
 seu_qc_ready
 #An object of class Seurat 
 #39058 features across 574532 samples within 1 assay 
 #Active assay: RNA (39058 features, 0 variable features)
 #1 layer present: counts
+
+
+table(seu_qc_ready@meta.data$Phenotype_factor)
+
+seu_obj1.1 <-  subset(seu_qc_ready, subset= Phenotype_factor %in% c("Normal", "ADJ_GC", "GC"))
+# table(seu_obj1.1@meta.data$Phenotype_factor)
+#  Normal     NAG     CAG     CSG      IM  ADJ_GC      GC LN_Meta LI_Meta OV_Meta PC_Meta 
+#   16990       0       0       0       0   89109  272821       0       0       0       0 
+#   GC_PC GC_PBMC 
+#       0       0 
+
+
+# SALVAGENTE: Creiamo il checkpoint!
+# Se il PC dovesse crashare in futuro, ripartirai direttamente da qui.
+saveRDS(seu_obj1.1, file = "seu_obj1.1.rds")
+
+rm(seu_qc_ready)
+gc()
+
 @
 
 <<QC>>=
@@ -59,58 +79,167 @@ library(tidyverse)
 library(pheatmap)
 library(patchwork)
 
-seu_obj1<- seu_qc_ready
+
+seu_obj1<- seu_obj1.1
+rm(seu_obj1.1)
+
+# 1. Impostiamo l'identità attiva (serve per sicurezza)
+Idents(seu_obj1) <- "Dataset"
 
 seu_obj1@assays$RNA$counts[1:2, 1:2]
+# 2 x 2 sparse Matrix of class "dgCMatrix"
+#            GSE134520_AAACCTGAGCGGATCA.1 GSE134520_AAACCTGCAGTGAGTG.1
+# AL627309.1                            .                            .
+# AP006222.2                            .                            .
 
 # Calcolo percentuale mitocondriale
-seu_obj1$percent.mt <- PercentageFeatureSet(object = seu_obj, pattern = '^MT-')
+# This function enables you to easily calculate the percentage of all the counts belonging to a subset of the possible features for each cell. This is useful when trying to compute the percentage of transcripts that map to mitochondrial genes for example. 
+seu_obj1$percent.mt <- PercentageFeatureSet(object = seu_obj1, pattern = '^MT-')
 
 #Decido che soglia usare
-VlnPlot(object = seu_obj1, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size = 0)
+VlnPlot(object = seu_obj1, features = c("nFeature_RNA", "nCount_RNA", "percent.mt", "percent_hb"), ncol = 4, pt.size = 0)
 FeatureScatter(seu_obj1, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+
 
 # Prendo i nomi dei geni mitocondriali (validi per tutto l'oggetto)
 mt_genes <- grep('^MT-', rownames(seu_obj1), value = TRUE)
 mt_genes
 
 # Sottoinsieme di sole cellule GSE225275
+# WhichCells Returns a list of cells that match a particular set of criteria such as identity class, high/low values for particular PCs, etc
 cells_225275 <- WhichCells(seu_obj1, expression = Dataset == "GSE225275")
 
 # Guardo se i conteggi grezzi su quei geni sono tutti zero SOLO per queste cellule
+# GetAssayData can be used to pull information from any of the expression matrices (eg. “counts”, “data”, or “scale.data”). SetAssayData can be used to replace one of these expression matrices
 counts_225275 <- GetAssayData(seu_obj1, layer = "counts")[mt_genes, cells_225275]
 summary(rowSums(counts_225275))
+# Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#       0       0       0    1256       0   38926
 range(counts_225275)
+# > range(counts_225275)
+# [1]  0 54
 
 # Confronto con un dataset che ha percent.mt normale, es. GSE134520
 cells_134520 <- WhichCells(seu_obj1, expression = Dataset == "GSE134520")
 counts_134520 <- GetAssayData(seu_obj1, layer = "counts")[mt_genes, cells_134520]
 summary(rowSums(counts_134520))
+  # Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+  #     0       0       0  360928  500940 2410163
 range(counts_134520)
-
-# Elimino il dataset GSE225275 perché ha troppi pochi geni mitocondriali (<55)
-seu_obj2 <- subset(seu_obj1, subset = Dataset != 'GSE225275')
-table(seu_obj1$Dataset)
-
-# Creo violin plot per capire che soglia decidere per le features
-VlnPlot(seu_obj2, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size = 0)
-FeatureScatter(seu_obj2, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+# > range(counts_134520)
+# [1]    0 1018
 
 # Applico i filtri definiti
-seu_pulito_full <- subset(seu_obj2, 
-                          subset = nFeature_RNA > 500 & 
-                                   nFeature_RNA < 3500 &
-                                   percent.mt < 15)
+seu_pulito_full <- subset(seu_obj1, 
+                          subset = nFeature_RNA > 200 & 
+                                   nFeature_RNA < 5000 &
+                                   percent.mt < 15 &
+                                  percent_hb < 5)
 
 # Verifico quante cellule sono rimaste
 cat("Cellule dopo il filtro:", ncol(seu_pulito_full), "\n")
-cat("Percentuale mantenuta:", round(100 * ncol(seu_pulito_full) / ncol(seu_obj), 2), "%\n")
+# Cellule dopo il filtro: 353246 
+cat("Percentuale mantenuta:", round(100 * ncol(seu_pulito_full) / ncol(seu_obj1), 2), "%\n")
+# Percentuale mantenuta: 93.22 %
 
 # Re-ispeziono i violini dopo la pulizia
-VlnPlot(seu_pulito, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size = 0)
+violinplot_dati_filtrati <- VlnPlot(object = seu_pulito_full, features = c("nFeature_RNA", "nCount_RNA", "percent.mt", "percent_hb"), ncol = 4, pt.size = 0)
 
-# IL COMANDO MAGICO PER SALVARE:
-ggsave("grafici/umap_cellule.png", plot = mio_plot, width = 8, height = 6, dpi = 300)
+#Controllo se è presente un determinato dataset che non visualizzo nel violinplot
+table(seu_pulito_full@active.ident)
+table(seu_pulito_full$Phenotype_factor[seu_pulito_full$Dataset == "GSE228598"])
+#Questo dataset non ha quello che ci interessa per questo non c'è
+
+
+# Salvo il grafico
+ggsave("grafici/violinplot_dati_filtrati.png", plot = violinplot_dati_filtrati, width = 8, height = 6, dpi = 300)
+
+
+#Scarico BPCells per non trattenere troppa RAM
+
+# Da R-universe (repository ufficiale del pacchetto)
+install.packages("BPCells", repos = "https://bnprks.r-universe.dev")
+
+# Serve anche SeuratObject aggiornato per il supporto BPCells (v5+)
+# e il pacchetto Seurat stesso in versione recente
+install.packages("Seurat")
+
+
+library(BPCells)
+library(Seurat)
+library(SeuratObject)
+
+# Supponiamo che tu riparta da dopo NormalizeData/FindVariableFeatures
+# ma prima di ScaleData/RunPCA
+
+# 1. Scrivi la matrice counts su disco in formato BPCells
+write_matrix_dir(
+  mat = seu_pulito_full[["RNA"]]$counts,
+  dir = "bpcells_counts"   # cartella dove salvare i dati on-disk
+)
+
+# 2. Ricarica la matrice come oggetto BPCells (puntatore ai file su disco)
+counts_mat <- open_matrix_dir(dir = "bpcells_counts")
+
+# 3. Sostituisci il layer counts nell'assay con la versione on-disk
+seu_pulito_full[["RNA"]]$counts <- counts_mat
+
+
+#CheckPoint
+saveRDS(seu_pulito_full, file = "seu_pulito_full_checkpoint.rds")
+
+
+
+write_matrix_dir(
+  mat = seu_pulito_full[["RNA"]]$data, 
+  dir = "bpcells_data"
+  )
+data_mat <- open_matrix_dir(dir = "bpcells_data")
+seu_pulito_full[["RNA"]]$data <- data_mat
+
+gc()
+
+
+#Normalizzazione
+#### run standard analysis workflow ####
+seu_pulito_full <- NormalizeData(seu_pulito_full)
+seu_pulito_full <- FindVariableFeatures(seu_pulito_full, selection.method = "vst", nfeatures = 2000)
+seu_pulito_full <- ScaleData(seu_pulito_full)
+seu_pulito_full <- RunPCA(seu_pulito_full)
+
+
+# Determine percent of variation associated with each PC(https://hbctraining.github.io/scRNA-seq/lessons/elbow_plot_metric.html)
+# use PCA reduction
+pct <- merged_GC_qc_filt[["pca"]]@stdev / sum(merged_GC_qc_filt[["pca"]]@stdev) * 100
+
+# Calculate cumulative percents for each PC
+cumu <- cumsum(pct)
+
+# Determine which PC exhibits cumulative percent greater than 90% and % variation associated with the PC as less than 5
+co1 <- which(cumu > 90 & pct < 5)[1]
+
+co1
+
+# Determine the difference between variation of PC and subsequent PC
+co2 <- sort(which((pct[1:length(pct) - 1] - pct[2:length(pct)]) > 0.1), decreasing = T)[1] + 1
+
+# last point where change of % of variation is more than 0.1%.
+co2
+
+# Minimum of the two calculation
+pcs <- min(co1, co2)
+
+pcs # 14
+
+options(future.globals.maxSize = 100000 * 1024^2)
+merged_GC_qc_filt <- FindNeighbors(merged_GC_qc_filt, dims = 1:14, reduction = "pca")
+merged_GC_qc_filt <- FindClusters(merged_GC_qc_filt, cluster.name = "unintegrated_clusters")
+
+merged_GC_qc_filt <- RunUMAP(merged_GC_qc_filt, dims = 1:14, reduction = "pca", reduction.name = "umap.unintegrated")
+
+DimPlot(merged_GC_qc_filt, reduction = "umap.unintegrated", group.by = c("Dataset"))
+
+
 @
 
 
