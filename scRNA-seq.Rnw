@@ -14,8 +14,8 @@ gc()
 library(Seurat)
 
 
-# percorso_file <- "C:/Users/User/OneDrive/Desktop/Progetto scRNA-seq/Gastric_integrated_data.rds"
-percorso_file <- "~/Desktop/Progetto scRNA-seq/Gastric_integrated_data.rds"
+percorso_file <- "C:/Users/User/OneDrive/Desktop/Progetto scRNA-seq/Gastric_integrated_data.rds"
+#percorso_file <- "~/Desktop/Progetto scRNA-seq/Gastric_integrated_data.rds"
 
 # Carica il file
 seu_obj <- readRDS(percorso_file)
@@ -54,11 +54,11 @@ seu_qc_ready
 #Active assay: RNA (39058 features, 0 variable features)
 #1 layer present: counts
 
-
+rm(seu_obj)
 table(seu_qc_ready@meta.data$Phenotype_factor)
 
 seu_obj1.1 <-  subset(seu_qc_ready, subset= Phenotype_factor %in% c("Normal", "ADJ_GC", "GC"))
-# table(seu_obj1.1@meta.data$Phenotype_factor)
+table(seu_obj1.1@meta.data$Phenotype_factor)
 #  Normal     NAG     CAG     CSG      IM  ADJ_GC      GC LN_Meta LI_Meta OV_Meta PC_Meta 
 #   16990       0       0       0       0   89109  272821       0       0       0       0 
 #   GC_PC GC_PBMC 
@@ -154,7 +154,18 @@ table(seu_pulito_full$Phenotype_factor[seu_pulito_full$Dataset == "GSE228598"])
 # Salvo il grafico
 ggsave("grafici/violinplot_dati_filtrati.png", plot = violinplot_dati_filtrati, width = 8, height = 6, dpi = 300)
 
+rm(seu_obj1)
+rm(percorso_file)
 
+
+#Normalizzazione
+#### run standard analysis workflow ####
+seu_pulito_full <- NormalizeData(seu_pulito_full)
+seu_pulito_full <- FindVariableFeatures(seu_pulito_full, selection.method = "vst", nfeatures = 2000)
+seu_pulito_full <- ScaleData(seu_pulito_full)
+
+###########################################
+#BPCells nel caso servisse
 #Scarico BPCells per non trattenere troppa RAM
 
 # Da R-universe (repository ufficiale del pacchetto)
@@ -180,6 +191,8 @@ write_matrix_dir(
 
 # 2. Ricarica la matrice come oggetto BPCells (puntatore ai file su disco)
 counts_mat <- open_matrix_dir(dir = "bpcells_counts")
+# Converte la matrice in formato interi compressi, più efficiente
+counts_mat <- convert_matrix_type(counts_mat, type = "uint32_t")  # o il tipo intero raccomandato da BPCells
 
 # 3. Sostituisci il layer counts nell'assay con la versione on-disk
 seu_pulito_full[["RNA"]]$counts <- counts_mat
@@ -187,7 +200,6 @@ seu_pulito_full[["RNA"]]$counts <- counts_mat
 
 #CheckPoint
 saveRDS(seu_pulito_full, file = "seu_pulito_full_checkpoint.rds")
-
 
 
 write_matrix_dir(
@@ -200,17 +212,14 @@ seu_pulito_full[["RNA"]]$data <- data_mat
 gc()
 
 
-#Normalizzazione
-#### run standard analysis workflow ####
-seu_pulito_full <- NormalizeData(seu_pulito_full)
-seu_pulito_full <- FindVariableFeatures(seu_pulito_full, selection.method = "vst", nfeatures = 2000)
-seu_pulito_full <- ScaleData(seu_pulito_full)
-seu_pulito_full <- RunPCA(seu_pulito_full)
 
+################################################### fine
+
+seu_pulito_full <- RunPCA(seu_pulito_full)
 
 # Determine percent of variation associated with each PC(https://hbctraining.github.io/scRNA-seq/lessons/elbow_plot_metric.html)
 # use PCA reduction
-pct <- merged_GC_qc_filt[["pca"]]@stdev / sum(merged_GC_qc_filt[["pca"]]@stdev) * 100
+pct <- seu_pulito_full[["pca"]]@stdev / sum(seu_pulito_full[["pca"]]@stdev) * 100
 
 # Calculate cumulative percents for each PC
 cumu <- cumsum(pct)
@@ -219,27 +228,32 @@ cumu <- cumsum(pct)
 co1 <- which(cumu > 90 & pct < 5)[1]
 
 co1
+#42
 
 # Determine the difference between variation of PC and subsequent PC
 co2 <- sort(which((pct[1:length(pct) - 1] - pct[2:length(pct)]) > 0.1), decreasing = T)[1] + 1
 
 # last point where change of % of variation is more than 0.1%.
 co2
-
+#15
 # Minimum of the two calculation
 pcs <- min(co1, co2)
 
-pcs # 14
+pcs # 15
 
 options(future.globals.maxSize = 100000 * 1024^2)
-merged_GC_qc_filt <- FindNeighbors(merged_GC_qc_filt, dims = 1:14, reduction = "pca")
-merged_GC_qc_filt <- FindClusters(merged_GC_qc_filt, cluster.name = "unintegrated_clusters")
+seu_pulito_full <- FindNeighbors(seu_pulito_full, dims = 1:14, reduction = "pca")
+seu_pulito_full <- FindClusters(seu_pulito_full, cluster.name = "unintegrated_clusters")
+seu_pulito_full <- RunUMAP(seu_pulito_full, dims = 1:14, reduction = "pca", reduction.name = "umap.unintegrated")
 
-merged_GC_qc_filt <- RunUMAP(merged_GC_qc_filt, dims = 1:14, reduction = "pca", reduction.name = "umap.unintegrated")
+grafico_cell_type<- DimPlot(seu_pulito_full, reduction = "umap.unintegrated",label = T, group.by = c("Cell_Type"))
 
-DimPlot(merged_GC_qc_filt, reduction = "umap.unintegrated", group.by = c("Dataset"))
+grafico_dataset<- DimPlot(seu_pulito_full, reduction = "umap.unintegrated", group.by = c("Dataset"))
 
+ggsave("grafici/umap_cell_type.png", plot = grafico_cell_type, width = 8, height = 6, dpi = 300)
+ggsave("grafici/umap_dataset.png", plot = grafico_dataset, width = 8, height = 6, dpi = 300)
 
+saveRDS(seu_pulito_full, file = "seu_pulito_full.rds")
 @
 
 
