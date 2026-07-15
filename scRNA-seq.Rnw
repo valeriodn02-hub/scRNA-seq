@@ -162,7 +162,22 @@ rm(percorso_file)
 #### run standard analysis workflow ####
 seu_pulito_full <- NormalizeData(seu_pulito_full)
 seu_pulito_full <- FindVariableFeatures(seu_pulito_full, selection.method = "vst", nfeatures = 2000)
+#The HVFInfo function pulls feature mean and dispersion from an Assay object. The vector of variable features can be pulled with the VariableFeatures function. VariableFeatures can also set the vector of variable features.
+
+head(x = VariableFeatures(seu_pulito_full))
+#"IGLV5-45" "IGKV3-11" "IGLV1-40" "IGKV4-1"  "IGLV2-14" "IGKV1-5"
+
 seu_pulito_full <- ScaleData(seu_pulito_full)
+
+
+head(x = HVFInfo(object = seu_pulito_full))
+#                      mean     variance variance.expected variance.standardized
+#AL627309.1    6.256263e-04 6.422221e-04      7.382421e-04             0.8699342
+#AP006222.2    2.460042e-03 2.799367e-03      3.222197e-03             0.8687756
+#RP4-669L17.10 1.047429e-04 1.047322e-04      1.146214e-04             0.9137229
+#RP5-857K21.4  2.830888e-06 2.830888e-06      2.831232e-06             0.9998785
+#RP11-206L10.3 1.245591e-04 1.245439e-04      1.370407e-04             0.9088097
+#RP11-206L10.5 8.492665e-06 8.492617e-06      8.699581e-06             0.9762099
 
 ###########################################
 #BPCells nel caso servisse
@@ -256,5 +271,71 @@ ggsave("grafici/umap_dataset.png", plot = grafico_dataset, width = 8, height = 6
 saveRDS(seu_pulito_full, file = "seu_pulito_full.rds")
 @
 
+<<Rimozione batch effect>>=
+seu_pulito_full <- readRDS("seu_pulito_full.rds")
+
+#### perform integration ####
+
+install.packages("harmony")
+library(harmony)
+library(Seurat)
+library(SeuratObject)
+
+
+
+#Da Seurat v5 in poi, un assay può invece contenere più "copie" parallele dello stesso tipo di dato, chiamate layer, una per ciascun sottoinsieme (tipicamente uno per campione/dataset). Quindi invece di un'unica matrice counts, puoi avere counts.GSE134520, counts.GSE150290, counts.GSE163558, ecc. — ognuna contenente solo le cellule di quel dataset specifico, ma tutte "vivendo" dentro lo stesso oggetto Seurat.
+seu_pulito_full[["RNA"]] <- split(seu_pulito_full[["RNA"]], f = 
+                                    seu_pulito_full$Dataset)
+seu_pulito_full <- IntegrateLayers(
+  object = seu_pulito_full, 
+  method = HarmonyIntegration,
+  orig.reduction = "pca", 
+  new.reduction = "harmony",
+  verbose = TRUE)
+
+# re-join layers after integration
+seu_pulito_full <- JoinLayers(seu_pulito_full)
+
+#### Perform the standard workflow for clustering analysis of the integrated dataset ####
+seu_pulito_full@reductions$harmony@stdev = as.numeric(apply(seu_pulito_full@reductions$harmony@cell.embeddings, 2, stats::sd))
+
+# Determine percent of variation associated with each PC(https://hbctraining.github.io/scRNA-seq/lessons/elbow_plot_metric.html)
+# use harmony reduction
+pct_har <- seu_pulito_full[["harmony"]]@stdev / sum(seu_pulito_full[["harmony"]]@stdev) * 100
+
+# Calculate cumulative percents for each PC
+cumu_har <- cumsum(pct_har)
+
+# Determine which PC exhibits cumulative percent greater than 90% and % variation associated with the PC as less than 5
+co1_har <- which(cumu_har > 90 & pct_har < 5)[1]
+
+co1_har
+#42
+
+# Determine the difference between variation of PC and subsequent PC
+co2_har <- sort(which((pct_har[1:length(pct_har) - 1] - pct_har[2:length(pct_har)]) > 0.1), decreasing = T)[1] + 1
+
+# last point where change of % of variation is more than 0.1%.
+co2_har
+#25
+# Minimum of the two calculation
+pcs_har <- min(co1_har, co2_har)
+
+pcs_har # 25
+
+seu_pulito_full <- FindNeighbors(seu_pulito_full, reduction = "harmony", dims = 1:25)
+seu_pulito_full <- FindClusters(seu_pulito_full, resolution = c(0.25, 0.5, 0.75, 1,1.25))
+seu_pulito_full <- RunUMAP(seu_pulito_full, dims = 1:25, reduction = "harmony",reduction.name = "umap.harmony")
+
+grafico_pulito_cell_type<- DimPlot(seu_pulito_full, reduction = "umap.harmony",label = T, group.by = c("Cell_Type"))
+
+grafico_pulito_dataset<- DimPlot(seu_pulito_full, reduction = "umap.harmony", group.by = c("Dataset"))
+
+ggsave("grafici/umap_puliti_cell_type.png", plot = grafico_pulito_cell_type, width = 8, height = 6, dpi = 300)
+ggsave("grafici/umap_puliti_dataset.png", plot = grafico_pulito_dataset, width = 8, height = 6, dpi = 300)
+
+saveRDS(seu_pulito_full, file = "Gastric_integrated_data.rds")
+
+@
 
 \end{document}
