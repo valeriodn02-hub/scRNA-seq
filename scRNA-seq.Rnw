@@ -327,15 +327,261 @@ seu_pulito_full <- FindNeighbors(seu_pulito_full, reduction = "harmony", dims = 
 seu_pulito_full <- FindClusters(seu_pulito_full, resolution = c(0.25, 0.5, 0.75, 1,1.25))
 seu_pulito_full <- RunUMAP(seu_pulito_full, dims = 1:25, reduction = "harmony",reduction.name = "umap.harmony")
 
-grafico_pulito_cell_type<- DimPlot(seu_pulito_full, reduction = "umap.harmony",label = T, group.by = c("Cell_Type"))
+#grafico_pulito_cell_type<- DimPlot(seu_pulito_full, reduction = "umap.harmony",label = T, group.by = c("Cell_Type"))
 
-grafico_pulito_dataset<- DimPlot(seu_pulito_full, reduction = "umap.harmony", group.by = c("Dataset"))
+#grafico_pulito_dataset<- DimPlot(seu_pulito_full, reduction = "umap.harmony", group.by = c("Dataset"))
 
-ggsave("grafici/umap_puliti_cell_type.png", plot = grafico_pulito_cell_type, width = 8, height = 6, dpi = 300)
-ggsave("grafici/umap_puliti_dataset.png", plot = grafico_pulito_dataset, width = 8, height = 6, dpi = 300)
+#ggsave("grafici/umap_puliti_cell_type.png", plot = grafico_pulito_cell_type, width = 8, height = 6, dpi = 300)
+#ggsave("grafici/umap_puliti_dataset.png", plot = grafico_pulito_dataset, width = 8, height = 6, dpi = 300)
 
 saveRDS(seu_pulito_full, file = "Gastric_integrated_data.rds")
 
+@
+
+<<DGEA>>=
+readRDS("Gastric_integrated_data.rds")
+
+# 1. Installa il gestore Bioconductor (se non ce l'hai già)
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+# 2. Installa DESeq2 tramite Bioconductor
+BiocManager::install("DESeq2")
+
+install.packages("ashr")
+
+library(Seurat)
+library(DESeq2)
+library(dplyr)
+library(tibble)
+library(tidyr)
+library(ggplot2)
+library(pheatmap)
+library(RColorBrewer)
+library(ashr)
+
+dir.create("DESeq2/pairwise", recursive = TRUE, showWarnings = FALSE)
+
+# Cell_Type con "/" rompe i path dei file -> lo rendo "safe"
+seu_pulito_full$Cell_Type_safe <- gsub("/", "-", seu_pulito_full$Cell_Type)
+
+# Verifica
+table(seu_pulito_full$Cell_Type_safe)
+
+# Aggrego per paziente + tipo cellulare in un colpo solo
+pseudobulk <- AggregateExpression(
+  seu_pulito_full,
+  assays = "RNA",
+  return.seurat = FALSE,
+  group.by = c("SAMPLE_ID", "Cell_Type")
+)
+
+counts_matrix_full <- pseudobulk$RNA
+colnames(counts_matrix_full)[1:5]  # controllo formato nomi, es. "NAG-1_Epithelial"
+
+# Seurat sostituisce automaticamente "_" con "-" nei nomi colonna: allineo qui i metadati
+patient_meta <- seu_pulito_full@meta.data %>%
+  distinct(SAMPLE_ID, Dataset, Phenotype_factor) %>%
+  mutate(SAMPLE_ID_clean = gsub("_", "-", SAMPLE_ID))
+
+# Controllo: nessun duplicato dopo la pulizia (altrimenti pazienti diversi collidono nello stesso nome)
+patient_meta %>% count(SAMPLE_ID_clean) %>% filter(n > 1)  # deve essere vuoto
+
+check_confounding <- patient_meta %>%
+  filter(Phenotype_factor %in% c("Normal", "GC")) %>%
+  count(Dataset, Phenotype_factor) %>%
+  pivot_wider(names_from = Phenotype_factor, values_from = n, values_fill = 0)
+
+print(check_confounding)
+
+run_pseudobulk_dge <- function(cell_type_interesse,
+                                condizioni = c("Normal", "GC"),
+                                use_dataset_covariate = TRUE,
+                                counts_matrix = counts_matrix_full,
+                                meta = patient_meta) {
+  
+  message("=== Processing: ", cell_type_interesse, " ===")
+  
+  cols_selezionate <- grep(paste0("_", cell_type_interesse, "$"), colnames(counts_matrix), value = TRUE)
+  if (length(cols_selezionate) == 0) {
+    warning("Nessuna colonna trovata per ", cell_type_interesse)
+    return(NULL)
+  }
+  
+  counts_sub <- counts_matrix[, cols_selezionate, drop = FALSE]
+  sample_ids <- gsub(paste0("_", cell_type_interesse, "$"), "", cols_selezionate)
+  
+  col_data <- data.frame(sample_id = sample_ids, col_name = cols_selezionate) %>%
+    left_join(meta, by = c("sample_id" = "SAMPLE_ID_clean"))
+  rownames(col_data) <- col_data$col_name
+  
+  # Controllo di sicurezza: il join deve aver trovato tutto
+  if (any(is.na(col_data$Phenotype_factor))) {
+    warning(cell_type_interesse, ": alcuni sample_id non hanno trovato corrispondenza nei metadati -> rimossi")
+    col_data <- col_data[!is.na(col_data$Phenotype_factor), ]
+    counts_sub <- counts_sub[, col_data$col_name, drop = FALSE]
+  }
+  
+  keep <- col_data$Phenotype_factor %in% condizioni
+  col_data <- col_data[keep, ]
+  counts_sub <- counts_sub[, keep, drop = FALSE]
+  
+  if (nrow(col_data) == 0) {
+    warning(cell_type_interesse, ": nessun campione rimasto dopo il filtro condizioni")
+    return(NULL)
+  }
+  
+  col_data$Phenotype_factor <- factor(col_data$Phenotype_factor, levels = condizioni)
+  col_data$Dataset <- factor(col_data$Dataset)
+  
+  tab_check <- table(col_data$Phenotype_factor)
+  if (any(tab_check < 3)) {
+    warning(cell_type_interesse, ": meno di 3 pazienti in un gruppo, risultati poco affidabili")
+  }
+  
+  design_formula <- if (use_dataset_covariate && nlevels(col_data$Dataset) > 1 &&
+                        nlevels(droplevels(col_data$Dataset)) < nrow(col_data)) {
+    ~ Dataset + Phenotype_factor
+  } else {
+    ~ Phenotype_factor
+  }
+  
+  dds <- tryCatch({
+    DESeqDataSetFromMatrix(
+      countData = round(counts_sub),
+      colData = col_data,
+      design = design_formula
+    )
+  }, error = function(e) {
+    message("Design con Dataset fallito (", conditionMessage(e), "), riprovo senza covariata")
+    DESeqDataSetFromMatrix(
+      countData = round(counts_sub),
+      colData = col_data,
+      design = ~ Phenotype_factor
+    )
+  })
+  
+  keep_genes <- rowSums(counts(dds) >= 10) >= 3
+  dds <- dds[keep_genes, ]
+  
+  # Diagnostica: rlog + PCA + heatmap correlazione
+  rld <- rlog(dds, blind = TRUE)
+  
+  pca_plot <- DESeq2::plotPCA(rld, intgroup = "Phenotype_factor") +
+    ggtitle(paste0("PCA - ", cell_type_interesse))
+  ggsave(paste0("DESeq2/pairwise/", cell_type_interesse, "_PCAplot.png"), pca_plot)
+  
+  rld_mat <- assay(rld)
+  rld_cor <- cor(rld_mat)
+  png(paste0("DESeq2/pairwise/", cell_type_interesse, "_sample_correlation_heatmap.png"))
+  pheatmap(rld_cor, annotation = col_data[, c("Phenotype_factor", "Dataset"), drop = FALSE])
+  dev.off()
+  
+  # Fit
+  dds <- DESeq(dds)
+  
+  png(paste0("DESeq2/pairwise/", cell_type_interesse, "_dispersion_plot.png"))
+  plotDispEsts(dds)
+  dev.off()
+  
+  contrast <- c("Phenotype_factor", condizioni[2], condizioni[1])
+  
+  res <- results(dds, contrast = contrast, alpha = 0.05)
+  res <- lfcShrink(dds, contrast = contrast, res = res, type = "ashr")
+  
+  res_tbl <- res %>%
+    data.frame() %>%
+    rownames_to_column(var = "gene") %>%
+    as_tibble() %>%
+    arrange(padj)
+  
+  write.csv(res_tbl,
+            paste0("DESeq2/pairwise/", cell_type_interesse, "_", condizioni[2], "_vs_", condizioni[1], "_all_genes.csv"),
+            quote = FALSE, row.names = FALSE)
+  
+  sig_res <- res_tbl %>% filter(padj < 0.05) %>% arrange(padj)
+  write.csv(sig_res,
+            paste0("DESeq2/pairwise/", cell_type_interesse, "_", condizioni[2], "_vs_", condizioni[1], "_sig_genes.csv"),
+            quote = FALSE, row.names = FALSE)
+  
+  message("Geni significativi trovati: ", nrow(sig_res))
+  
+  # Volcano plot
+  res_table_thres <- res_tbl %>%
+    mutate(threshold = padj < 0.05 & abs(log2FoldChange) >= 0.58)
+  
+  volcano <- ggplot(res_table_thres, aes(x = log2FoldChange, y = -log10(padj), colour = threshold)) +
+    geom_point(alpha = 0.6) +
+    ggtitle(paste0("Volcano - ", condizioni[2], " vs ", condizioni[1], " (", cell_type_interesse, ")")) +
+    xlab("log2 fold change") +
+    ylab("-log10 adjusted p-value") +
+    theme_bw() +
+    theme(legend.position = "none", plot.title = element_text(hjust = 0.5))
+  ggsave(paste0("DESeq2/pairwise/", cell_type_interesse, "_volcano.png"), volcano)
+  
+  # Heatmap geni significativi
+  if (nrow(sig_res) > 1) {
+    normalized_counts <- counts(dds, normalized = TRUE)
+    sig_norm <- data.frame(normalized_counts) %>%
+      rownames_to_column(var = "gene") %>%
+      filter(gene %in% sig_res$gene)
+    
+    heat_colors <- brewer.pal(6, "YlOrRd")
+    png(paste0("DESeq2/pairwise/", cell_type_interesse, "_sig_genes_heatmap.png"), height = 800, width = 600)
+    pheatmap(sig_norm[, -1],
+             color = heat_colors,
+             cluster_rows = TRUE,
+             show_rownames = FALSE,
+             annotation = col_data[, c("Phenotype_factor", "Dataset"), drop = FALSE],
+             border_color = NA,
+             scale = "row")
+    dev.off()
+  }
+  
+  return(list(dds = dds, res_tbl = res_tbl, sig_res = sig_res))
+}
+
+
+# Salva prima qualsiasi oggetto importante che hai in memoria!
+saveRDS(seu_pulito_full, file = "seu_pulito_full_checkpoint.rds")
+
+seu_pulito_full <- readRDS("seu_pulito_full_checkpoint.rds")
+
+res_epithelial <- run_pseudobulk_dge(
+  "Epithelial", 
+  condizioni = c("Normal", "GC"), 
+  use_dataset_covariate = FALSE   # <-- design semplice: ~ Phenotype_factor
+)
+
+head(res_epithelial$sig_res, 20)
+
+# Prendi i conteggi normalizzati per un gene sospetto, es. GNB2L1
+normalized_counts <- counts(res_epithelial$dds, normalized = TRUE)
+
+check_gene <- data.frame(
+  sample = colnames(normalized_counts),
+  expr = normalized_counts["GNB2L1", ]
+) %>%
+  left_join(patient_meta %>% mutate(sample_clean = paste0(SAMPLE_ID_clean, "_Epithelial")), 
+            by = c("sample" = "sample_clean"))
+
+print(check_gene[, c("sample", "expr", "Dataset", "Phenotype_factor")])
+
+# Controlla se RACK1 esiste come gene separato nell'oggetto
+grep("RACK1", rownames(seu_pulito_full), value = TRUE)
+grep("GNB2L1", rownames(seu_pulito_full), value = TRUE)
+
+cell_types <- unique(seu_pulito_full$Cell_Type_safe)
+
+all_results <- map(cell_types, function(ct) {
+  tryCatch(
+    run_pseudobulk_dge(ct, condizioni = c("Normal", "GC"), use_dataset_covariate = FALSE),
+    error = function(e) {
+      warning("Errore per ", ct, ": ", conditionMessage(e))
+      NULL
+    }
+  )
+}) %>% setNames(cell_types)
 @
 
 \end{document}
