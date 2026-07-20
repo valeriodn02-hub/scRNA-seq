@@ -593,22 +593,6 @@ head(res_epithelial$sig_res, 20)
 #19 MALL         41.8            7.11 0.784 1.53e-20 1.28e-17
 #20 CDH17        44.0            7.79 0.874 3.48e-20 2.75e-17
 
-# Prendi i conteggi normalizzati per un gene sospetto, es. GNB2L1
-normalized_counts <- counts(res_epithelial$dds, normalized = TRUE)
-
-check_gene <- data.frame(
-  sample = colnames(normalized_counts),
-  expr = normalized_counts["GNB2L1", ]
-) %>%
-  left_join(patient_meta %>% mutate(sample_clean = paste0(SAMPLE_ID_clean, "_Epithelial")), 
-            by = c("sample" = "sample_clean"))
-
-print(check_gene[, c("sample", "expr", "Dataset", "Phenotype_factor")])
-
-# Controlla se RACK1 esiste come gene separato nell'oggetto
-grep("RACK1", rownames(seu_pulito_full), value = TRUE)
-grep("GNB2L1", rownames(seu_pulito_full), value = TRUE)
-
 cell_types <- unique(seu_pulito_full$Cell_Type_safe)
 
 all_results <- map(cell_types, function(ct) {
