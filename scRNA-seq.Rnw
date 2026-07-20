@@ -215,7 +215,8 @@ seu_pulito_full[["RNA"]]$counts <- counts_mat
 
 #CheckPoint
 saveRDS(seu_pulito_full, file = "seu_pulito_full_checkpoint.rds")
-
+        
+seu_pulito_full <- readRDS(file = "seu_pulito_full_checkpoint.rds" )
 
 write_matrix_dir(
   mat = seu_pulito_full[["RNA"]]$data, 
@@ -341,11 +342,10 @@ saveRDS(seu_pulito_full, file = "Gastric_integrated_data.rds")
 <<DGEA>>=
 readRDS("Gastric_integrated_data.rds")
 
-# 1. Installa il gestore Bioconductor (se non ce l'hai già)
+seu_pulito_full <- readRDS(file = "seu_pulito_full_checkpoint.rds" )
+
 if (!require("BiocManager", quietly = TRUE))
     install.packages("BiocManager")
-
-# 2. Installa DESeq2 tramite Bioconductor
 BiocManager::install("DESeq2")
 
 install.packages("ashr")
@@ -359,6 +359,7 @@ library(ggplot2)
 library(pheatmap)
 library(RColorBrewer)
 library(ashr)
+library(purrr)
 
 dir.create("DESeq2/pairwise", recursive = TRUE, showWarnings = FALSE)
 
@@ -367,6 +368,8 @@ seu_pulito_full$Cell_Type_safe <- gsub("/", "-", seu_pulito_full$Cell_Type)
 
 # Verifica
 table(seu_pulito_full$Cell_Type_safe)
+      #     B Endothelial  Epithelial  Fibroblast        Mast     Myeloid      Plasma        T-NK 
+      # 38824       13153       61220       23570        7266       36486       33573      139154
 
 # Aggrego per paziente + tipo cellulare in un colpo solo
 pseudobulk <- AggregateExpression(
@@ -393,6 +396,18 @@ check_confounding <- patient_meta %>%
   pivot_wider(names_from = Phenotype_factor, values_from = n, values_fill = 0)
 
 print(check_confounding)
+#    Dataset      GC Normal
+#    <chr>     <int>  <int>
+#  1 GSE134520     1      0
+#  2 GSE150290    23      0
+#  3 GSE163558     3      0
+#  4 GSE167297    10      0
+#  5 GSE183904    26      0
+#  6 GSE201347    12      0
+#  7 GSE210347     9      5
+#  8 GSE225275     0      4
+#  9 GSE231539     5      0
+# 10 GSE234129     6      0
 
 run_pseudobulk_dge <- function(cell_type_interesse,
                                 condizioni = c("Normal", "GC"),
@@ -545,7 +560,7 @@ run_pseudobulk_dge <- function(cell_type_interesse,
 # Salva prima qualsiasi oggetto importante che hai in memoria!
 saveRDS(seu_pulito_full, file = "seu_pulito_full_checkpoint.rds")
 
-seu_pulito_full <- readRDS("seu_pulito_full_checkpoint.rds")
+# seu_pulito_full <- readRDS("seu_pulito_full_checkpoint.rds")
 
 res_epithelial <- run_pseudobulk_dge(
   "Epithelial", 
