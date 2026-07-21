@@ -560,7 +560,7 @@ run_pseudobulk_dge <- function(cell_type_interesse,
 # Salva prima qualsiasi oggetto importante che hai in memoria!
 saveRDS(seu_pulito_full, file = "seu_pulito_full_checkpoint.rds")
 
-# seu_pulito_full <- readRDS("seu_pulito_full_checkpoint.rds")
+seu_pulito_full <- readRDS("seu_pulito_full_checkpoint.rds")
 
 res_epithelial <- run_pseudobulk_dge(
   "Epithelial", 
@@ -580,15 +580,15 @@ seu_pulito_full$custom_group <- case_when(
   seu_pulito_full$Dataset == "GSE210347" & seu_pulito_full$Phenotype_factor == "Normal" ~ "GSE210347_Normal",
   seu_pulito_full$Dataset == "GSE225275" & seu_pulito_full$Phenotype_factor == "Normal" ~ "GSE225275_Normal",
   seu_pulito_full$Phenotype_factor == "GC"                                              ~ "Altri_dataset_GC",
-  TRUE ~ NA_character_   # tutte le altre cellule (CAG, IM, ADJ_GC, ecc.) restano NA
+ # TRUE ~ NA_character_   # tutte le altre cellule (CAG, IM, ADJ_GC, ecc.) restano NA
 )
 
 table(seu_pulito_full$custom_group, useNA = "ifany")
 
 colori_custom <- c(
-  "Altri_dataset_GC"   = "grey70",     # tutti gli altri dataset GC insieme, un solo colore neutro
+  "Altri_dataset_GC"   = "lightgrey",     # tutti gli altri dataset GC insieme, un solo colore neutro
   "GSE210347_GC"        = "#E41A1C",   # rosso
-  "GSE210347_Normal"     = "#377EB8",  # blu
+  "GSE210347_Normal"     = "darkblue",  # blu
   "GSE225275_Normal"     = "#4DAF4A"   # verde
 )
 
@@ -597,11 +597,21 @@ DimPlot(
   reduction = "umap.harmony",
   group.by = "custom_group",
   cols = colori_custom,
-  na.value = "grey90"     # le cellule con altri fenotipi (NA) appaiono in grigio chiaro, quasi trasparenti
+  na.value = "transparent"     # le cellule con altri fenotipi (NA) appaiono in grigio chiaro, quasi trasparenti
 ) +
   ggtitle("UMAP integrata - Normal vs GC per dataset critico")
 
+#solo epiteliali
 
+epi_only <- subset(seu_pulito_full, subset = !is.na(custom_group) & Cell_Type_safe == "Epithelial")
+
+DimPlot(
+  epi_only,
+  reduction = "umap.harmony",
+  group.by = "custom_group",
+  cols = colori_custom
+) +
+  ggtitle("UMAP integrata (SOLO Epithelial) - Normal vs GC")
 
 
 cell_types <- unique(seu_pulito_full$Cell_Type_safe)
