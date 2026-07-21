@@ -257,12 +257,12 @@ pcs <- min(co1, co2)
 
 pcs # 15
 
-options(future.globals.maxSize = 100000 * 1024^2)
+# options(future.globals.maxSize = 100000 * 1024^2)
 seu_pulito_full <- FindNeighbors(seu_pulito_full, dims = 1:14, reduction = "pca")
 seu_pulito_full <- FindClusters(seu_pulito_full, cluster.name = "unintegrated_clusters")
 seu_pulito_full <- RunUMAP(seu_pulito_full, dims = 1:14, reduction = "pca", reduction.name = "umap.unintegrated")
 
-grafico_cell_type<- DimPlot(seu_pulito_full, reduction = "umap.unintegrated",label = T, group.by = c("Cell_Type"))
+ grafico_cell_type<- DimPlot(seu_pulito_full, reduction = "umap.unintegrated",label = T, group.by = c("Cell_Type"))
 
 grafico_dataset<- DimPlot(seu_pulito_full, reduction = "umap.unintegrated", group.by = c("Dataset"))
 
@@ -328,7 +328,7 @@ seu_pulito_full <- FindNeighbors(seu_pulito_full, reduction = "harmony", dims = 
 seu_pulito_full <- FindClusters(seu_pulito_full, resolution = c(0.25, 0.5, 0.75, 1,1.25))
 seu_pulito_full <- RunUMAP(seu_pulito_full, dims = 1:25, reduction = "harmony",reduction.name = "umap.harmony")
 
-#grafico_pulito_cell_type<- DimPlot(seu_pulito_full, reduction = "umap.harmony",label = T, group.by = c("Cell_Type"))
+ #grafico_pulito_cell_type<- DimPlot(seu_pulito_full, reduction = "umap.harmony",label = T, group.by = c("Cell_Type"))
 
 #grafico_pulito_dataset<- DimPlot(seu_pulito_full, reduction = "umap.harmony", group.by = c("Dataset"))
 
@@ -560,7 +560,10 @@ run_pseudobulk_dge <- function(cell_type_interesse,
 # Salva prima qualsiasi oggetto importante che hai in memoria!
 saveRDS(seu_pulito_full, file = "seu_pulito_full_checkpoint.rds")
 
-# seu_pulito_full <- readRDS("seu_pulito_full_checkpoint.rds")
+seu_pulito_full <- readRDS("seu_pulito_full_checkpoint.rds")
+
+
+table(seu_pulito_full@meta.data$Dataset)
 
 res_epithelial <- run_pseudobulk_dge(
   "Epithelial", 
@@ -570,21 +573,52 @@ res_epithelial <- run_pseudobulk_dge(
 
 head(res_epithelial$sig_res, 20)
 
-# Prendi i conteggi normalizzati per un gene sospetto, es. GNB2L1
-normalized_counts <- counts(res_epithelial$dds, normalized = TRUE)
 
-check_gene <- data.frame(
-  sample = colnames(normalized_counts),
-  expr = normalized_counts["GNB2L1", ]
-) %>%
-  left_join(patient_meta %>% mutate(sample_clean = paste0(SAMPLE_ID_clean, "_Epithelial")), 
-            by = c("sample" = "sample_clean"))
+############
+#UMAP PER DATASET
 
-print(check_gene[, c("sample", "expr", "Dataset", "Phenotype_factor")])
+print(check_confounding)
+#               GC      Normal
+ # GSE210347     9      5
+ # GSE225275     0      4
 
-# Controlla se RACK1 esiste come gene separato nell'oggetto
-grep("RACK1", rownames(seu_pulito_full), value = TRUE)
-grep("GNB2L1", rownames(seu_pulito_full), value = TRUE)
+
+
+DimPlot(seu_pulito_full, reduction = "umap.harmony", group.by = "Dataset", label = FALSE) +
+  ggtitle("UMAP integrata - colorata per Dataset")
+
+library(dplyr)
+
+seu_pulito_full$custom_group <- case_when(
+  seu_pulito_full$Dataset == "GSE210347" & seu_pulito_full$Phenotype_factor == "GC"     ~ "GSE210347_GC",
+  seu_pulito_full$Dataset == "GSE210347" & seu_pulito_full$Phenotype_factor == "Normal" ~ "GSE210347_Normal",
+  seu_pulito_full$Dataset == "GSE225275" & seu_pulito_full$Phenotype_factor == "Normal" ~ "GSE225275_Normal",
+  seu_pulito_full$Phenotype_factor == "GC"                                              ~ "Altri_dataset_GC",
+  TRUE ~ NA_character_   # tutte le altre cellule (CAG, IM, ADJ_GC, ecc.) restano NA
+)
+
+table(seu_pulito_full$custom_group, useNA = "ifany")
+
+colori_custom <- c(
+  "Altri_dataset_GC"   = "grey70",     # tutti gli altri dataset GC insieme, un solo colore neutro
+  "GSE210347_GC"        = "#E41A1C",   # rosso
+  "GSE210347_Normal"     = "#377EB8",  # blu
+  "GSE225275_Normal"     = "#4DAF4A"   # verde
+)
+
+DimPlot(
+  seu_pulito_full,
+  reduction = "umap.harmony",
+  group.by = "custom_group",
+  cols = colori_custom,
+  na.value = "grey90"     # le cellule con altri fenotipi (NA) appaiono in grigio chiaro, quasi trasparenti
+) +
+  ggtitle("UMAP integrata - Normal vs GC per dataset critico")
+
+
+
+
+
 
 cell_types <- unique(seu_pulito_full$Cell_Type_safe)
 
