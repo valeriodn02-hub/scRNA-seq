@@ -732,8 +732,53 @@ DimPlot(
 ) +
   ggtitle("UMAP integrata (SOLO Epithelial) - Normal vs GC")
 
+DimPlot(seu_pulito_full, reduction = "umap.harmony", group.by = "Dataset", label = FALSE) +
+  ggtitle("UMAP integrata - colorata per Dataset")
+
+library(dplyr)
+
+seu_pulito_full$custom_group <- case_when(
+  seu_pulito_full$Dataset == "GSE210347" & seu_pulito_full$Phenotype_factor == "GC"     ~ "GSE210347_GC",
+  seu_pulito_full$Dataset == "GSE210347" & seu_pulito_full$Phenotype_factor == "Normal" ~ "GSE210347_Normal",
+  seu_pulito_full$Dataset == "GSE225275" & seu_pulito_full$Phenotype_factor == "Normal" ~ "GSE225275_Normal",
+  seu_pulito_full$Phenotype_factor == "GC"                                              ~ "Altri_dataset_GC",
+ # TRUE ~ NA_character_   # tutte le altre cellule (CAG, IM, ADJ_GC, ecc.) restano NA
+)
+
+table(seu_pulito_full$custom_group, useNA = "ifany")
+
+colori_custom <- c(
+  "Altri_dataset_GC"   = "lightgrey",     # tutti gli altri dataset GC insieme, un solo colore neutro
+  "GSE210347_GC"        = "#E41A1C",   # rosso
+  "GSE210347_Normal"     = "darkblue",  # blu
+  "GSE225275_Normal"     = "#4DAF4A"   # verde
+)
+
+DimPlot(
+  seu_pulito_full,
+  reduction = "umap.harmony",
+  group.by = "custom_group",
+  cols = colori_custom,
+  na.value = "transparent"     # le cellule con altri fenotipi (NA) appaiono in grigio chiaro, quasi trasparenti
+) +
+  ggtitle("UMAP integrata - Normal vs GC per dataset critico")
+
+#solo epiteliali
+
+epi_only <- subset(seu_pulito_full, subset = !is.na(custom_group) & Cell_Type_safe == "Epithelial")
+
+DimPlot(
+  epi_only,
+  reduction = "umap.harmony",
+  group.by = "custom_group",
+  cols = colori_custom
+) +
+  ggtitle("UMAP integrata (SOLO Epithelial) - Normal vs GC")
+
+
 cell_types <- unique(seu_pulito_full$Cell_Type_safe)
 
+#tutti
 all_results <- map(cell_types, function(ct) {
   tryCatch(
     run_pseudobulk_dge(ct, condizioni = c("Normal", "GC"), use_dataset_covariate = FALSE),
