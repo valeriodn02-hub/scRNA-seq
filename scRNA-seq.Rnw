@@ -294,6 +294,7 @@ seu_pulito_full <- IntegrateLayers(
   new.reduction = "harmony",
   verbose = TRUE)
 
+
 # re-join layers after integration
 seu_pulito_full <- JoinLayers(seu_pulito_full)
 
@@ -565,13 +566,115 @@ seu_pulito_full <- readRDS("seu_pulito_full_checkpoint.rds")
 
 table(seu_pulito_full@meta.data$Dataset)
 
-res_epithelial <- run_pseudobulk_dge(
+#TUTTI I DATASET
+res_epithelial_batch <- run_pseudobulk_dge(
   "Epithelial", 
   condizioni = c("Normal", "GC"), 
-  use_dataset_covariate = FALSE   # <-- design semplice: ~ Phenotype_factor
+  use_dataset_covariate = TRUE   # <-- ora include Dataset nel design
 )
 
-head(res_epithelial$sig_res, 20)
+#SOLO 1 DATASET
+res_epithelial_gse210347 <- run_pseudobulk_dge(
+  "Epithelial",
+  condizioni = c("Normal", "GC"),
+  use_dataset_covariate = FALSE,   # non serve più: c'è un solo dataset, niente da correggere
+  meta = patient_meta %>% filter(Dataset == "GSE210347")
+)
+
+# Controlla il design usato (dovrebbe essere ~Phenotype_factor, dato che Dataset ha un solo livello)
+design(res_epithelial_gse210347$dds)
+
+# Quanti pazienti restano?
+table(res_epithelial_gse210347$dds$Phenotype_factor)
+
+# Quanti geni significativi
+nrow(res_epithelial_gse210347$sig_res)
+head(res_epithelial_gse210347$sig_res, 20)
+
+#    gene          baseMean log2FoldChange lfcSE   pvalue     padj
+#    <chr>            <dbl>          <dbl> <dbl>    <dbl>    <dbl>
+#  1 RPL12           4687.            2.08 0.228 1.95e-22 2.45e-18
+#  2 SELENBP1         103.           -3.28 0.368 2.56e-19 1.61e-15
+#  3 EIF3L            119.            3.57 0.403 4.42e-19 1.85e-15
+#  4 RPS15A          3510.            1.70 0.217 1.05e-17 3.32e-14
+#  5 MITF              12.8          -3.16 0.377 1.96e-17 4.94e-14
+#  6 GPX1              35.1          -8.31 1.03  4.18e-17 7.52e-14
+#  7 RPLP2           4720.            1.70 0.221 3.68e-17 7.52e-14
+#  8 ZC3H11A           22.4          -5.46 0.665 7.09e-17 8.12e-14
+#  9 AC007969.5        34.7          -8.28 1.03  7.03e-17 8.12e-14
+# 10 AC016739.2        32.7          -8.22 1.02  5.90e-17 8.12e-14
+# 11 RPL6P27           33.6          -8.25 1.03  5.99e-17 8.12e-14
+# 12 RPL13AP5          31.2          -8.16 1.02  7.97e-17 8.36e-14
+# 13 WBSCR22           29.1          -8.08 1.02  1.27e-16 1.23e-13
+# 14 RPS12           6285.            1.55 0.204 1.73e-16 1.28e-13
+# 15 CTB-63M22.1       30.1          -8.11 1.02  1.43e-16 1.28e-13
+# 16 RPL10AP6          29.7          -8.09 1.02  1.66e-16 1.28e-13
+# 17 RPL23AP42         30.8          -8.14 1.03  1.60e-16 1.28e-13
+# 18 FAM101A           29.9          -8.10 1.03  2.08e-16 1.36e-13
+# 19 LINC01578         26.5          -7.96 1.01  2.16e-16 1.36e-13
+# 20 RP11-475C16.1     32.6          -8.19 1.04  1.99e-16 1.36e-13
+
+######FINE
+
+# Verifica quale design è stato effettivamente usato
+design(res_epithelial_batch$dds)
+
+# Quanti geni significativi trovi ora?
+nrow(res_epithelial_batch$sig_res)
+head(res_epithelial_batch$sig_res, 20)
+
+# Numero di geni significativi in ciascun approccio
+cat("Senza covariata Dataset:", nrow(res_epithelial$sig_res), "geni significativi\n")
+cat("Con covariata Dataset:  ", nrow(res_epithelial_batch$sig_res), "geni significativi\n")
+
+# Quali geni sono significativi in ENTRAMBI (probabilmente i più affidabili)
+geni_comuni <- intersect(res_epithelial$sig_res$gene, res_epithelial_batch$sig_res$gene)
+length(geni_comuni)
+head(geni_comuni, 20)
+
+#A 2
+confronto_geni_comuni <- res_epithelial$res_tbl %>%
+  filter(gene %in% geni_comuni) %>%
+  select(gene, log2FC_no_batch = log2FoldChange, padj_no_batch = padj) %>%
+  left_join(
+    res_epithelial_batch$res_tbl %>%
+      filter(gene %in% geni_comuni) %>%
+      select(gene, log2FC_con_batch = log2FoldChange, padj_con_batch = padj),
+    by = "gene"
+  ) %>%
+  arrange(padj_con_batch)
+
+confronto_geni_comuni
+
+#A 3
+confronto_tre_vie <- res_epithelial$res_tbl %>%
+  select(gene, log2FC_no_batch = log2FoldChange, padj_no_batch = padj) %>%
+  inner_join(
+    res_epithelial_batch$res_tbl %>%
+      select(gene, log2FC_con_covariata = log2FoldChange, padj_con_covariata = padj),
+    by = "gene"
+  ) %>%
+  inner_join(
+    res_epithelial_gse210347$res_tbl %>%
+      select(gene, log2FC_solo_gse210347 = log2FoldChange, padj_solo_gse210347 = padj),
+    by = "gene"
+  ) %>%
+  filter(gene %in% geni_comuni) %>%
+  arrange(padj_solo_gse210347)
+
+confronto_tre_vie
+#    gene     log2FC_no_batch padj_no_batch log2FC_con_covariata padj_con_covariata log2FC_solo_gse210347 padj_solo_gse210347
+#    <chr>              <dbl>         <dbl>                <dbl>              <dbl>                 <dbl>               <dbl>
+#  1 RPL12              1.19       0.00190                 1.11            1.25e- 8                  2.08            2.45e-18
+#  2 SELENBP1          -1.39       0.000509               -4.02            2.24e-12                 -3.28            1.61e-15
+#  3 RPS15A             1.13       0.00289                 0.826           1.95e- 5                  1.70            3.32e-14
+#  4 MITF              -1.73       0.000123               -3.61            2.71e- 8                 -3.16            4.94e-14
+#  5 RPLP2              0.475      0.00741                 0.822           8.83e- 7                  1.70            7.52e-14
+#  6 RPS12              0.906      0.0175                  0.674           7.28e- 5                  1.55            1.28e-13
+#  7 RPS2               1.52       0.000548                1.59            4.26e- 7                  2.63            1.74e-13
+#  8 FERMT1             0.879      0.0180                  1.69            2.25e- 3                  2.94            3.60e-13
+#  9 RPL10              1.11       0.00480                 0.769           3.27e- 3                  1.69            4.17e-13
+# 10 PDILT             -3.06       0.00475                -6.17            1.77e- 5                 -6.99            6.17e-13
 
 
 ############
@@ -582,7 +685,9 @@ print(check_confounding)
  # GSE210347     9      5
  # GSE225275     0      4
 
+saveRDS(seu_pulito_full, file = "seu_pulito_full_checkpoint1.rds")
 
+seu_pulito_full <- readRDS("seu_pulito_full_checkpoint1.rds")
 
 DimPlot(seu_pulito_full, reduction = "umap.harmony", group.by = "Dataset", label = FALSE) +
   ggtitle("UMAP integrata - colorata per Dataset")
@@ -594,15 +699,15 @@ seu_pulito_full$custom_group <- case_when(
   seu_pulito_full$Dataset == "GSE210347" & seu_pulito_full$Phenotype_factor == "Normal" ~ "GSE210347_Normal",
   seu_pulito_full$Dataset == "GSE225275" & seu_pulito_full$Phenotype_factor == "Normal" ~ "GSE225275_Normal",
   seu_pulito_full$Phenotype_factor == "GC"                                              ~ "Altri_dataset_GC",
-  TRUE ~ NA_character_   # tutte le altre cellule (CAG, IM, ADJ_GC, ecc.) restano NA
+ # TRUE ~ NA_character_   # tutte le altre cellule (CAG, IM, ADJ_GC, ecc.) restano NA
 )
 
 table(seu_pulito_full$custom_group, useNA = "ifany")
 
 colori_custom <- c(
-  "Altri_dataset_GC"   = "grey70",     # tutti gli altri dataset GC insieme, un solo colore neutro
+  "Altri_dataset_GC"   = "lightgrey",     # tutti gli altri dataset GC insieme, un solo colore neutro
   "GSE210347_GC"        = "#E41A1C",   # rosso
-  "GSE210347_Normal"     = "#377EB8",  # blu
+  "GSE210347_Normal"     = "darkblue",  # blu
   "GSE225275_Normal"     = "#4DAF4A"   # verde
 )
 
@@ -611,14 +716,21 @@ DimPlot(
   reduction = "umap.harmony",
   group.by = "custom_group",
   cols = colori_custom,
-  na.value = "grey90"     # le cellule con altri fenotipi (NA) appaiono in grigio chiaro, quasi trasparenti
+  na.value = "transparent"     # le cellule con altri fenotipi (NA) appaiono in grigio chiaro, quasi trasparenti
 ) +
   ggtitle("UMAP integrata - Normal vs GC per dataset critico")
 
+#solo epiteliali
 
+epi_only <- subset(seu_pulito_full, subset = !is.na(custom_group) & Cell_Type_safe == "Epithelial")
 
-
-
+DimPlot(
+  epi_only,
+  reduction = "umap.harmony",
+  group.by = "custom_group",
+  cols = colori_custom
+) +
+  ggtitle("UMAP integrata (SOLO Epithelial) - Normal vs GC")
 
 cell_types <- unique(seu_pulito_full$Cell_Type_safe)
 
