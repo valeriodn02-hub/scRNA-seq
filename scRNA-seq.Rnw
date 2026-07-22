@@ -613,6 +613,29 @@ head(res_epithelial_gse210347$sig_res, 20)
 # 18 FAM101A           29.9          -8.10 1.03  2.08e-16 1.36e-13
 # 19 LINC01578         26.5          -7.96 1.01  2.16e-16 1.36e-13
 # 20 RP11-475C16.1     32.6          -8.19 1.04  1.99e-16 1.36e-13
+dev.off()
+top_n_genes <- res_epithelial_gse210347$sig_res %>%
+  arrange(padj) %>%
+  head(50) %>%   # prova con 30-50, molto più leggibile
+  pull(gene)
+
+normalized_counts <- counts(res_epithelial_gse210347$dds, normalized = TRUE)
+sig_norm_top <- data.frame(normalized_counts) %>%
+  rownames_to_column(var = "gene") %>%
+  filter(gene %in% top_n_genes)
+
+col_data_gse <- as.data.frame(colData(res_epithelial_gse210347$dds))
+
+grafico1 <- pheatmap(sig_norm_top[, -1],
+         labels_row = sig_norm_top$gene,   # mostra i nomi dei geni, ora che sono pochi
+         color = colorRampPalette(c("navy", "white", "firebrick3"))(50),
+         cluster_rows = TRUE,
+         show_rownames = TRUE,
+         annotation_col = col_data_gse[, c("Phenotype_factor"), drop = FALSE],
+         border_color = NA,
+         scale = "row",
+         fontsize_row = 8)
+
 
 ######FINE
 
